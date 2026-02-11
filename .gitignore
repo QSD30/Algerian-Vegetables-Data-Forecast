@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Frontend build/dev artifacts
+frontend/node_modules/
+frontend/dist/
+
+# Local data extraction artifacts (large/local-only)
+*.pdf
+*.png
+table_dump*.json
+exploration_results.json
+sample_page1.txt
+products_2025.txt
+
+# OS/editor
+.DS_Store
+Thumbs.db

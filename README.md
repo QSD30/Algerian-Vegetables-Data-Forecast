@@ -1,0 +1,57 @@
+# Algerian Vegetables Data Forecast
+
+Full-stack price forecasting app:
+- `frontend/`: React + Vite dashboard (Cloudflare Pages-ready)
+- `backend/`: FastAPI API (optional if you want API mode)
+
+## Repository Layout
+
+- `frontend/`: UI, static data build script, Cloudflare config
+- `backend/main.py`: API endpoints (`/api/products`, `/api/data/{product}`, `/api/chat`)
+- `extracted_prices.csv`: historical monthly data
+- `predictions_2026.csv`: prediction data
+
+## Quick Start (Local)
+
+### 1) Backend (FastAPI)
+
+```bash
+cd backend
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+python main.py
+```
+
+Backend runs on `http://localhost:8000`.
+
+### 2) Frontend (Vite)
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Frontend runs on `http://localhost:5173`.
+
+## Cloudflare Pages Deployment (Frontend)
+
+In Cloudflare Pages project settings:
+1. Root directory: `frontend`
+2. Build command: `npm run build`
+3. Build output directory: `dist`
+4. Environment variable: `NODE_VERSION=22.16.0` (or Node `>=20.19.0`)
+5. Build system: prefer `v3`
+
+Important:
+- Cloudflare Pages deploys the static frontend only.
+- The backend API must be deployed separately (for example on Render/Railway/Fly/VM) if you need live API endpoints.
+
+## Backend Data Path Configuration
+
+`backend/main.py` reads CSV paths from env vars if provided:
+- `HISTORICAL_FILE` (default: `./extracted_prices.csv`)
+- `PREDICTIONS_FILE` (default: `./predictions_2026.csv`)
+
+You can set relative or absolute paths.
