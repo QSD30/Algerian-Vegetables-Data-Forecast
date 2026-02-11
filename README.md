@@ -48,6 +48,11 @@ Important:
 - Cloudflare Pages deploys the static frontend only.
 - The backend API must be deployed separately (for example on Render/Railway/Fly/VM) if you need live API endpoints.
 
+Fallback if Pages is configured to build from repository root:
+- Build command: `npm run build`
+- Build output directory: `frontend/dist`
+- This repository includes a root `package.json` and `wrangler.toml` so root builds work.
+
 ## Backend Data Path Configuration
 
 `backend/main.py` reads CSV paths from env vars if provided:
