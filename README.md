@@ -92,3 +92,10 @@ For Pages-hosted chat (`/api/chat` function), set these as Cloudflare Pages envi
 - `FIRECRAWL_API_KEY`
 - `OPENROUTER_MODEL` (optional, default: `stepfun/step-3.5-flash:free`)
 - `OPENROUTER_FALLBACK_MODELS` (optional, default: `openrouter/free`)
+
+Cloudflare project routing checks:
+- If Pages Root directory is `frontend`, function path is `frontend/functions/api/chat.js`.
+- If Pages Root directory is repository root, function path is `functions/api/chat.js` (wrapper file included in this repo).
+- Ensure `_redirects` keeps API routes before SPA fallback:
+  - `/api/* /api/:splat 200`
+  - `/* /index.html 200`
