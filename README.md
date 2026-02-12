@@ -1,5 +1,11 @@
 # Algerian Vegetables Data Forecast
 
+## Project Links
+
+- Repository: https://github.com/QSD30/Algerian-Vegetables-Data-Forecast
+- Hosted on Cloudflare Pages: https://algerian-vegetables-data-forecast.pages.dev/
+- Data source: https://www.dcwmila.dz/index.php/moy-prix/prix-mens
+
 Full-stack price forecasting app:
 - `frontend/`: React + Vite dashboard (Cloudflare Pages-ready)
 - `backend/`: FastAPI API (optional if you want API mode)
