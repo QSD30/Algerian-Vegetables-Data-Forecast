@@ -21,7 +21,26 @@ import {
 import "./App.css";
 
 const DASHBOARD_DATA_URL = `${import.meta.env.BASE_URL}data/dashboard-data.json`;
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "http://localhost:8000").replace(/\/$/, "");
+
+const resolveApiBaseUrl = () => {
+  const explicitApiBase = (import.meta.env.VITE_API_BASE_URL || "").trim();
+  if (explicitApiBase) {
+    return explicitApiBase.replace(/\/$/, "");
+  }
+
+  if (typeof window !== "undefined") {
+    const host = window.location.hostname;
+    const isLocalHost = host === "localhost" || host === "127.0.0.1";
+    if (!isLocalHost) {
+      // In deployed environments, avoid accidentally targeting the visitor's localhost.
+      return "";
+    }
+  }
+
+  return "http://localhost:8000";
+};
+
+const API_BASE_URL = resolveApiBaseUrl();
 
 const TRANSLATIONS = {
   ar: {
