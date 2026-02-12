@@ -1,0 +1,8 @@
+OPENROUTER_API_KEY=your_openrouter_api_key
+FIRECRAWL_API_KEY=your_firecrawl_api_key
+OPENROUTER_MODEL=stepfun/step-3.5-flash:free
+OPENROUTER_FALLBACK_MODELS=openrouter/free
+
+# Optional:
+# OPENROUTER_API_URL=https://openrouter.ai/api/v1/chat/completions
+# FIRECRAWL_API_URL=https://api.firecrawl.dev/v1/search

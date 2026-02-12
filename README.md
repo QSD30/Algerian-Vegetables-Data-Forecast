@@ -81,6 +81,14 @@ Frontend environment variable:
 - `VITE_API_BASE_URL` (default: `http://localhost:8000`)
 
 Important for Cloudflare Pages:
-- Always set `VITE_API_BASE_URL` to your deployed backend URL (for example `https://your-backend.example.com`).
-- If you leave it empty in production, frontend requests go to same-origin `/api/*` on Pages.
+- If you use Cloudflare Pages Functions (`frontend/functions/api/chat.js`), leave `VITE_API_BASE_URL` empty so frontend uses same-origin `/api/chat`.
+- If you use an external backend, set `VITE_API_BASE_URL` to that backend URL (for example `https://your-backend.example.com`).
 - Never use `localhost` for hosted deployments, or each visitor browser will try their own machine.
+
+## Cloudflare Pages Chat Env Vars
+
+For Pages-hosted chat (`/api/chat` function), set these as Cloudflare Pages environment variables:
+- `OPENROUTER_API_KEY`
+- `FIRECRAWL_API_KEY`
+- `OPENROUTER_MODEL` (optional, default: `stepfun/step-3.5-flash:free`)
+- `OPENROUTER_FALLBACK_MODELS` (optional, default: `openrouter/free`)
