@@ -1,8 +1,14 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-import pandas as pd
+from datetime import date, datetime, timedelta
+import json
 import os
 from pathlib import Path
+import re
+from typing import Any
+
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+import httpx
+import pandas as pd
 from pydantic import BaseModel
 
 app = FastAPI()
@@ -19,6 +25,42 @@ app.add_middleware(
 ROOT_DIR = Path(__file__).resolve().parent.parent
 
 
+def load_local_env_files():
+    candidate_paths = [
+        Path(__file__).resolve().parent / ".env",
+        ROOT_DIR / ".env",
+    ]
+    for path in candidate_paths:
+        if not path.exists():
+            continue
+        for raw_line in path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = value
+
+
+load_local_env_files()
+
+OPENROUTER_API_URL = os.getenv(
+    "OPENROUTER_API_URL", "https://openrouter.ai/api/v1/chat/completions"
+)
+FIRECRAWL_API_URL = os.getenv("FIRECRAWL_API_URL", "https://api.firecrawl.dev/v1/search")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+FIRECRAWL_API_KEY = os.getenv("FIRECRAWL_API_KEY", "")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "stepfun/step-3.5-flash:free")
+OPENROUTER_FALLBACK_MODELS = [
+    model.strip()
+    for model in os.getenv("OPENROUTER_FALLBACK_MODELS", "openrouter/free").split(",")
+    if model.strip()
+]
+API_TIMEOUT_SECONDS = float(os.getenv("AI_HTTP_TIMEOUT_SECONDS", "30"))
+
+
 def resolve_data_path(env_var: str, default_filename: str) -> Path:
     raw = os.getenv(env_var)
     if raw:
@@ -32,6 +74,7 @@ def resolve_data_path(env_var: str, default_filename: str) -> Path:
 PREDICTIONS_FILE = resolve_data_path("PREDICTIONS_FILE", "predictions_2026.csv")
 HISTORICAL_FILE = resolve_data_path("HISTORICAL_FILE", "extracted_prices.csv")
 
+
 def get_data():
     if not PREDICTIONS_FILE.exists() or not HISTORICAL_FILE.exists():
         return None, None
@@ -39,8 +82,21 @@ def get_data():
     hist = pd.read_csv(HISTORICAL_FILE)
     return hist, preds
 
+
 PRODUCT_CATEGORIES = {
-    "Vegetables": ["potato", "tomato", "onion", "lettuce", "squash", "carrots", "peppers_sweet", "peppers_hot", "green_beans", "beetroot", "garlic"],
+    "Vegetables": [
+        "potato",
+        "tomato",
+        "onion",
+        "lettuce",
+        "squash",
+        "carrots",
+        "peppers_sweet",
+        "peppers_hot",
+        "green_beans",
+        "beetroot",
+        "garlic",
+    ],
     "Fruits": ["dates", "apple_imported", "apple_local", "banana", "strawberry", "orange"],
 }
 
@@ -58,6 +114,7 @@ TOMATO_2018_OVERRIDES = {
     12: 79.0,
 }
 
+
 def sanitize_historical_prices(product_hist: pd.DataFrame) -> pd.DataFrame:
     if product_hist.empty:
         return product_hist
@@ -74,7 +131,11 @@ def sanitize_historical_prices(product_hist: pd.DataFrame) -> pd.DataFrame:
     if cleaned.empty:
         return cleaned[["year", "month", "retail"]]
 
-    product_name = str(cleaned["product"].iloc[0]).strip().lower() if "product" in cleaned.columns and not cleaned.empty else ""
+    product_name = (
+        str(cleaned["product"].iloc[0]).strip().lower()
+        if "product" in cleaned.columns and not cleaned.empty
+        else ""
+    )
     monthly = cleaned.groupby(["year", "month"], as_index=False)["retail"].mean()
     monthly = monthly.sort_values(["year", "month"]).reset_index(drop=True)
 
@@ -116,7 +177,9 @@ def sanitize_historical_prices(product_hist: pd.DataFrame) -> pd.DataFrame:
     for idx in anomaly_indexes:
         value = float(monthly.at[idx, "retail"])
         local_value = float(local_median.at[idx])
-        trend_value = float(recent_trend.at[idx]) if pd.notna(recent_trend.at[idx]) else local_value
+        trend_value = (
+            float(recent_trend.at[idx]) if pd.notna(recent_trend.at[idx]) else local_value
+        )
 
         if bool(jump_up.at[idx]):
             reference_value = min(local_value, trend_value * 1.15)
@@ -141,7 +204,9 @@ def sanitize_historical_prices(product_hist: pd.DataFrame) -> pd.DataFrame:
         ]
 
         if valid_candidates:
-            best_candidate = min(valid_candidates, key=lambda candidate: abs(candidate - reference_value))
+            best_candidate = min(
+                valid_candidates, key=lambda candidate: abs(candidate - reference_value)
+            )
             old_error = abs(value - reference_value)
             new_error = abs(best_candidate - reference_value)
 
@@ -163,6 +228,7 @@ def sanitize_historical_prices(product_hist: pd.DataFrame) -> pd.DataFrame:
 
     return monthly[["year", "month", "retail"]]
 
+
 def sanitize_predictions(product_preds: pd.DataFrame) -> pd.DataFrame:
     if product_preds.empty:
         return product_preds
@@ -178,21 +244,446 @@ def sanitize_predictions(product_preds: pd.DataFrame) -> pd.DataFrame:
     cleaned = cleaned[cleaned["predicted_retail"] <= 1000]
     return cleaned
 
+
+def parse_user_date(message: str, reference_day: date | None = None) -> date | None:
+    if reference_day is None:
+        reference_day = date.today()
+
+    lowered = message.strip().lower()
+    normalized = re.sub(r"\s+", " ", lowered)
+
+    relative_day_map = {
+        0: [
+            "today",
+            "today's",
+            "aujourd'hui",
+            "اليوم",
+        ],
+        1: [
+            "tomorrow",
+            "tommorow",
+            "tmrw",
+            "demain",
+            "غدا",
+            "غداً",
+        ],
+        -1: [
+            "yesterday",
+            "hier",
+            "أمس",
+        ],
+        2: [
+            "day after tomorrow",
+            "after tomorrow",
+            "apres-demain",
+            "après-demain",
+            "بعد غد",
+        ],
+        -2: [
+            "day before yesterday",
+            "avant-hier",
+            "قبل أمس",
+        ],
+    }
+
+    for delta, keywords in relative_day_map.items():
+        for keyword in keywords:
+            if keyword in normalized:
+                return reference_day + timedelta(days=delta)
+
+    full_date = re.search(r"\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b", message)
+    if full_date:
+        year, month, day = map(int, full_date.groups())
+        try:
+            return date(year, month, day)
+        except ValueError:
+            return None
+
+    year_month = re.search(r"\b(20\d{2})[-/](\d{1,2})\b", message)
+    if year_month:
+        year, month = map(int, year_month.groups())
+        try:
+            return date(year, month, 15)
+        except ValueError:
+            return None
+
+    return None
+
+
+def monthly_frame_to_points(frame: pd.DataFrame, price_column: str, source_type: str):
+    points: list[dict[str, Any]] = []
+    if frame.empty:
+        return points
+
+    sorted_frame = frame.sort_values(["year", "month"]).copy()
+    for _, row in sorted_frame.iterrows():
+        points.append(
+            {
+                "date": date(int(row["year"]), int(row["month"]), 1),
+                "price": float(row[price_column]),
+                "type": source_type,
+            }
+        )
+    return points
+
+
+def estimate_daily_price(monthly_points: list[dict[str, Any]], target_day: date):
+    if not monthly_points:
+        return None
+
+    sorted_points = sorted(monthly_points, key=lambda item: item["date"])
+    target_dt = datetime.combine(target_day, datetime.min.time())
+    point_dts = [datetime.combine(item["date"], datetime.min.time()) for item in sorted_points]
+
+    if target_dt <= point_dts[0]:
+        first = sorted_points[0]
+        return {
+            "price": round(float(first["price"]), 2),
+            "method": "nearest",
+            "period": first["date"].isoformat(),
+            "based_on": [first["type"]],
+        }
+    if target_dt >= point_dts[-1]:
+        last = sorted_points[-1]
+        return {
+            "price": round(float(last["price"]), 2),
+            "method": "nearest",
+            "period": last["date"].isoformat(),
+            "based_on": [last["type"]],
+        }
+
+    for idx in range(len(point_dts) - 1):
+        start_dt = point_dts[idx]
+        end_dt = point_dts[idx + 1]
+        if start_dt <= target_dt <= end_dt:
+            left = sorted_points[idx]
+            right = sorted_points[idx + 1]
+            total_days = max((end_dt - start_dt).days, 1)
+            passed_days = (target_dt - start_dt).days
+            alpha = passed_days / total_days
+            interpolated = float(left["price"]) + (float(right["price"]) - float(left["price"])) * alpha
+            return {
+                "price": round(interpolated, 2),
+                "method": "interpolated",
+                "period": f"{left['date'].isoformat()}..{right['date'].isoformat()}",
+                "based_on": [left["type"], right["type"]],
+            }
+
+    return None
+
+
+def build_price_context(
+    message: str,
+    product: str,
+    hist: pd.DataFrame,
+    preds: pd.DataFrame,
+    reference_day: date | None = None,
+):
+    if reference_day is None:
+        reference_day = date.today()
+
+    product_hist = sanitize_historical_prices(hist[hist["product"] == product].copy())
+    product_preds = sanitize_predictions(preds[preds["product"] == product].copy())
+
+    hist_points = monthly_frame_to_points(product_hist, "retail", "Historical")
+    pred_points = monthly_frame_to_points(product_preds, "predicted_retail", "Prediction")
+    combined_points = sorted(hist_points + pred_points, key=lambda item: item["date"])
+
+    requested_day = parse_user_date(message, reference_day=reference_day)
+    estimated = estimate_daily_price(combined_points, requested_day) if requested_day else None
+
+    stats = {
+        "historical_points": len(hist_points),
+        "prediction_points": len(pred_points),
+        "latest_historical": (
+            {
+                "date": hist_points[-1]["date"].isoformat(),
+                "price": round(hist_points[-1]["price"], 2),
+            }
+            if hist_points
+            else None
+        ),
+        "first_prediction": (
+            {
+                "date": pred_points[0]["date"].isoformat(),
+                "price": round(pred_points[0]["price"], 2),
+            }
+            if pred_points
+            else None
+        ),
+        "avg_historical_price": (
+            round(sum(point["price"] for point in hist_points) / len(hist_points), 2)
+            if hist_points
+            else None
+        ),
+        "min_historical_price": (
+            round(min(point["price"] for point in hist_points), 2) if hist_points else None
+        ),
+        "max_historical_price": (
+            round(max(point["price"] for point in hist_points), 2) if hist_points else None
+        ),
+    }
+
+    compact_series = [
+        {"date": point["date"].isoformat(), "price": round(point["price"], 2), "type": point["type"]}
+        for point in combined_points
+    ]
+
+    return {
+        "product": product,
+        "reference_day": reference_day.isoformat(),
+        "reference_weekday": reference_day.strftime("%A"),
+        "requested_day": requested_day.isoformat() if requested_day else None,
+        "estimated_day_price": estimated,
+        "stats": stats,
+        "series": compact_series,
+    }
+
+
+def build_fallback_response(message: str, price_context: dict[str, Any]):
+    stats = price_context.get("stats", {})
+    estimated = price_context.get("estimated_day_price")
+    requested_day = price_context.get("requested_day")
+    product = price_context.get("product", "this product")
+    display_name = product.replace("_", " ")
+
+    lines = []
+    if requested_day and estimated:
+        lines.append(
+            f"Estimated price for {display_name} on {requested_day}: {estimated['price']} DZD (method: {estimated['method']}, based on monthly data)."
+        )
+    elif requested_day:
+        lines.append(
+            f"I could not estimate a specific value for {requested_day}, but I used the latest available monthly data for {display_name}."
+        )
+
+    latest = stats.get("latest_historical")
+    if latest:
+        lines.append(
+            f"Latest historical point: {latest['price']} DZD at {latest['date']}."
+        )
+
+    first_prediction = stats.get("first_prediction")
+    if first_prediction:
+        lines.append(
+            f"Forecast series starts at {first_prediction['date']} with {first_prediction['price']} DZD."
+        )
+
+    avg_price = stats.get("avg_historical_price")
+    min_price = stats.get("min_historical_price")
+    max_price = stats.get("max_historical_price")
+    if avg_price is not None and min_price is not None and max_price is not None:
+        lines.append(
+            f"Historical range is {min_price}-{max_price} DZD, with average {avg_price} DZD."
+        )
+
+    if not lines:
+        lines.append(
+            f"I used your local dataset for {display_name}, but I need more details in your question to estimate a target day."
+        )
+    return " ".join(lines)
+
+
+async def fetch_firecrawl_context(product: str, message: str, reference_day: date | None = None):
+    if not FIRECRAWL_API_KEY:
+        return []
+    if reference_day is None:
+        reference_day = date.today()
+
+    message_hint = message.strip().replace("\n", " ")
+    if len(message_hint) > 140:
+        message_hint = message_hint[:140]
+    current_year = reference_day.year
+    reference_iso = reference_day.isoformat()
+
+    queries = [
+        f"latest Algeria {product.replace('_', ' ')} {message_hint} {current_year}",
+        f"{product.replace('_', ' ')} Algeria price weather agriculture policy {reference_iso}",
+        f"Algeria agriculture {product.replace('_', ' ')} imports drought rainfall latest",
+        f"Algeria food inflation {product.replace('_', ' ')} market update {current_year}",
+    ]
+
+    headers = {
+        "Authorization": f"Bearer {FIRECRAWL_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    seen_urls = set()
+    collected: list[dict[str, str]] = []
+
+    async with httpx.AsyncClient(timeout=API_TIMEOUT_SECONDS) as client:
+        for query in queries:
+            try:
+                response = await client.post(
+                    FIRECRAWL_API_URL,
+                    headers=headers,
+                    json={
+                        "query": query,
+                        "limit": 3,
+                    },
+                )
+                if response.status_code >= 400:
+                    continue
+
+                payload = response.json()
+                raw_data = payload.get("data", [])
+                results = []
+
+                if isinstance(raw_data, list):
+                    results = raw_data
+                elif isinstance(raw_data, dict):
+                    for key in ("web", "news", "results", "items"):
+                        candidate = raw_data.get(key)
+                        if isinstance(candidate, list):
+                            results.extend(candidate)
+
+                for item in results:
+                    if not isinstance(item, dict):
+                        continue
+                    url = str(item.get("url") or "").strip()
+                    if not url or url in seen_urls:
+                        continue
+                    seen_urls.add(url)
+
+                    title = str(item.get("title") or "Untitled source").strip()
+                    snippet = str(
+                        item.get("description")
+                        or item.get("snippet")
+                        or item.get("markdown")
+                        or ""
+                    ).strip()
+                    if len(snippet) > 280:
+                        snippet = snippet[:277] + "..."
+
+                    collected.append(
+                        {
+                            "title": title,
+                            "url": url,
+                            "snippet": snippet,
+                        }
+                    )
+                    if len(collected) >= 8:
+                        break
+            except Exception:
+                continue
+
+            if len(collected) >= 8:
+                break
+
+    return collected
+
+
+def serialize_openrouter_content(content: Any) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str):
+                    parts.append(text.strip())
+        return "\n".join(part for part in parts if part).strip()
+    return ""
+
+
+def get_model_candidates():
+    candidates: list[str] = [OPENROUTER_MODEL]
+    for fallback in OPENROUTER_FALLBACK_MODELS:
+        if fallback not in candidates:
+            candidates.append(fallback)
+    return candidates
+
+
+async def generate_llm_response(
+    message: str,
+    product: str,
+    language: str,
+    price_context: dict[str, Any],
+    web_context: list[dict[str, str]],
+):
+    if not OPENROUTER_API_KEY:
+        return None, None
+
+    product_display = product.replace("_", " ")
+    reference_day = str(price_context.get("reference_day") or date.today().isoformat())
+    reference_weekday = str(price_context.get("reference_weekday") or date.today().strftime("%A"))
+    system_prompt = (
+        "You are an expert market analyst for Algerian vegetables and fruits. "
+        "Always prioritize the provided local dataset context for price answers. "
+        "Use web context only as extra factors (weather, politics, imports, logistics, inflation). "
+        f"Current reference date is {reference_day} ({reference_weekday}). Treat this as 'today'. "
+        "If the user asks for an exact day, explain that base data is monthly and provide a precise estimate from the provided context. "
+        "Be concise, numeric, and clear. Mention uncertainty when needed."
+    )
+
+    user_prompt = (
+        f"Language preference: {language}\n"
+        f"Today reference: {reference_day} ({reference_weekday})\n"
+        f"Selected product: {product_display}\n"
+        f"User question: {message}\n\n"
+        f"Local price context JSON:\n{json.dumps(price_context, ensure_ascii=False)}\n\n"
+        f"Web factors JSON:\n{json.dumps(web_context, ensure_ascii=False)}"
+    )
+
+    payload = {
+        "temperature": 0.2,
+        "max_tokens": 700,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+    }
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "http://localhost:5173",
+        "X-Title": "Algerian Veggies Dashboard",
+    }
+
+    model_candidates = get_model_candidates()
+    last_model = model_candidates[0] if model_candidates else OPENROUTER_MODEL
+
+    async with httpx.AsyncClient(timeout=API_TIMEOUT_SECONDS) as client:
+        for model in model_candidates:
+            payload["model"] = model
+            last_model = model
+            try:
+                response = await client.post(OPENROUTER_API_URL, headers=headers, json=payload)
+                response.raise_for_status()
+                response_json = response.json()
+            except Exception:
+                continue
+
+            choices = response_json.get("choices", [])
+            if not choices:
+                continue
+
+            message_obj = choices[0].get("message", {})
+            content = serialize_openrouter_content(message_obj.get("content"))
+            if not content:
+                continue
+
+            return content, response_json.get("model") or model
+
+    return None, last_model
+
+
 @app.get("/api/products")
 async def get_products():
     hist, _ = get_data()
     if hist is None:
         return {}
-    
+
     available = set(hist[hist["product"].isin(ALLOWED_PRODUCTS)]["product"].dropna().unique())
     categorized = {}
-    
+
     for cat, items in PRODUCT_CATEGORIES.items():
         matched = [item for item in items if item in available]
         if matched:
             categorized[cat] = sorted(matched)
-            
+
     return categorized
+
 
 @app.get("/api/data/{product}")
 async def get_product_data(product: str):
@@ -202,52 +693,102 @@ async def get_product_data(product: str):
     hist, preds = get_data()
     if hist is None or preds is None:
         raise HTTPException(status_code=404, detail="Data not found")
-    
+
     p_hist = sanitize_historical_prices(hist[hist["product"] == product].copy())
     p_preds = sanitize_predictions(preds[preds["product"] == product].copy())
-    
+
     chart_data = []
     if not p_hist.empty:
         p_hist_cleaned = p_hist.sort_values(["year", "month"])
-        
+
         for _, row in p_hist_cleaned.iterrows():
-            chart_data.append({
-                "date": f"{int(row['year'])}-{int(row['month']):02d}",
-                "price": round(row['retail'], 2),
-                "type": "Historical"
-            })
-        
+            chart_data.append(
+                {
+                    "date": f"{int(row['year'])}-{int(row['month']):02d}",
+                    "price": round(row["retail"], 2),
+                    "type": "Historical",
+                }
+            )
+
     if not p_preds.empty:
         p_preds = p_preds.sort_values(["year", "month"])
         for _, row in p_preds.iterrows():
-            chart_data.append({
-                "date": f"{int(row['year'])}-{int(row['month']):02d}",
-                "price": round(row['predicted_retail'], 2),
-                "type": "Prediction"
-            })
-        
+            chart_data.append(
+                {
+                    "date": f"{int(row['year'])}-{int(row['month']):02d}",
+                    "price": round(row["predicted_retail"], 2),
+                    "type": "Prediction",
+                }
+            )
+
     return chart_data
+
 
 class ChatRequest(BaseModel):
     message: str
     product: str
+    language: str = "en"
+
 
 @app.post("/api/chat")
 async def chat(request: ChatRequest):
-    # Expanded insights
-    insights = {
-        "potato": "Market data shows prices reaching 60-90 DZD. Recent reports indicate high demand.",
-        "meat": "Local red meat remains expensive despite government imports. Sheep meat is particularly volatile reaching 2500 DZD/kg.",
-        "eggs": "Egg prices have seen recent stabilization but remain sensitive to feed costs.",
-        "semolina": "State-subsidized prices help keep semolina stable at 1000 DZD per 25kg bag."
+    product = request.product.strip().lower()
+    if product not in ALLOWED_PRODUCTS:
+        raise HTTPException(status_code=404, detail="Product not available in this dashboard")
+
+    hist, preds = get_data()
+    if hist is None or preds is None:
+        raise HTTPException(status_code=404, detail="Data not found")
+
+    reference_day = date.today()
+    price_context = build_price_context(
+        request.message,
+        product,
+        hist,
+        preds,
+        reference_day=reference_day,
+    )
+    web_context = await fetch_firecrawl_context(
+        product,
+        request.message,
+        reference_day=reference_day,
+    )
+    if not FIRECRAWL_API_KEY:
+        web_context_status = "disabled_no_api_key"
+    elif web_context:
+        web_context_status = "ok"
+    else:
+        web_context_status = "no_results"
+
+    llm_response = None
+    used_model = None
+    try:
+        llm_response, used_model = await generate_llm_response(
+            message=request.message,
+            product=product,
+            language=request.language,
+            price_context=price_context,
+            web_context=web_context,
+        )
+    except Exception:
+        llm_response = None
+
+    response_text = llm_response or build_fallback_response(request.message, price_context)
+
+    return {
+        "response": response_text,
+        "product": product,
+        "requested_day": price_context.get("requested_day"),
+        "estimated_day_price": price_context.get("estimated_day_price"),
+        "data_stats": price_context.get("stats"),
+        "server_today": reference_day.isoformat(),
+        "sources": web_context,
+        "web_context_status": web_context_status,
+        "model": used_model or OPENROUTER_MODEL,
     }
-    
-    # Dynamic insight generation
-    prod = request.product.lower()
-    insight = insights.get(prod, f"The current trend for {prod} shows seasonal sensitivity. Weather impacts in major production wilayas are being monitored for yield impacts.")
-    
-    return {"response": insight}
+
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -12,10 +12,16 @@ import {
   BrainCircuit,
   Search,
   ChevronDown,
+  MessageSquareText,
+  SendHorizontal,
+  Bot,
+  User,
+  Link2,
 } from "lucide-react";
 import "./App.css";
 
 const DASHBOARD_DATA_URL = `${import.meta.env.BASE_URL}data/dashboard-data.json`;
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "http://localhost:8000").replace(/\/$/, "");
 
 const TRANSLATIONS = {
   ar: {
@@ -52,6 +58,17 @@ const TRANSLATIONS = {
     footerML: "تم التحقق عبر محرك التعلم الآلي",
     unitDzd: "دج",
     unitDzdPkt: "دج/وحدة",
+    chatTitle: "المساعد السوقي",
+    chatSubtitle: "اسأل عن أي تاريخ. الإجابة تعتمد على بياناتك المحلية + مؤثرات الويب.",
+    chatInputLabel: "سؤالك",
+    chatPlaceholder: "مثال: ما سعر الطماطم المتوقع في 2026-03-15 ولماذا؟",
+    chatSend: "إرسال",
+    chatThinking: "جارٍ تحليل بيانات الأسعار ومؤثرات الويب...",
+    chatNoMessages: "اسأل عن سعر أي منتج في أي يوم.",
+    chatSources: "المصادر",
+    chatError: "خدمة المحادثة غير متاحة حالياً.",
+    chatModel: "النموذج",
+    chatWelcome: (product) => `اسألني عن سعر ${product}. التحليل يبدأ دائماً من بياناتك المحلية.`,
   },
   en: {
     languageLabel: "Language",
@@ -87,6 +104,17 @@ const TRANSLATIONS = {
     footerML: "Validated by ML Engine",
     unitDzd: "DZD",
     unitDzdPkt: "DZD PKT",
+    chatTitle: "Market Copilot",
+    chatSubtitle: "Ask for any date. Answers combine your local dataset + web factors.",
+    chatInputLabel: "Your question",
+    chatPlaceholder: "Example: What is the likely tomato price on 2026-03-15 and why?",
+    chatSend: "Send",
+    chatThinking: "Analyzing price data and web factors...",
+    chatNoMessages: "Ask about a product price for any day.",
+    chatSources: "Sources",
+    chatError: "Chat service is currently unavailable.",
+    chatModel: "Model",
+    chatWelcome: (product) => `Ask me anything about ${product} prices. I always start from your local dataset.`,
   },
 };
 
@@ -167,6 +195,10 @@ function App() {
   const [activeCategory, setActiveCategory] = useState("");
   const [dataByProduct, setDataByProduct] = useState({});
   const [loading, setLoading] = useState(true);
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
+  const [chatError, setChatError] = useState("");
 
   const isArabic = language === "ar";
   const t = TRANSLATIONS[language];
@@ -215,6 +247,89 @@ function App() {
       return PRODUCT_LABELS_AR[product] || formatProductName(product);
     }
     return formatProductName(product);
+  };
+
+  const selectedProductLabel = useMemo(() => {
+    if (!selectedProduct) {
+      return "";
+    }
+    const formatted = selectedProduct.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+    if (isArabic) {
+      return PRODUCT_LABELS_AR[selectedProduct] || formatted;
+    }
+    return formatted;
+  }, [selectedProduct, isArabic]);
+
+  useEffect(() => {
+    if (!selectedProduct) {
+      setChatMessages([]);
+      return;
+    }
+    setChatMessages([
+      {
+        role: "assistant",
+        text: t.chatWelcome(selectedProductLabel),
+        sources: [],
+        model: null,
+      },
+    ]);
+    setChatInput("");
+    setChatError("");
+  }, [selectedProduct, selectedProductLabel, t]);
+
+  const sendChat = async (event) => {
+    event.preventDefault();
+    const message = chatInput.trim();
+    if (!message || !selectedProduct || chatLoading) {
+      return;
+    }
+
+    const userMessage = { role: "user", text: message };
+    setChatMessages((prev) => [...prev, userMessage]);
+    setChatInput("");
+    setChatError("");
+    setChatLoading(true);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message,
+          product: selectedProduct,
+          language,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Chat request failed with status ${response.status}`);
+      }
+
+      const payload = await response.json();
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          text: payload?.response || t.chatError,
+          sources: Array.isArray(payload?.sources) ? payload.sources : [],
+          model: payload?.model || null,
+        },
+      ]);
+    } catch (error) {
+      console.error("Chat request error:", error);
+      setChatError(t.chatError);
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          text: t.chatError,
+          sources: [],
+          model: null,
+        },
+      ]);
+    } finally {
+      setChatLoading(false);
+    }
   };
 
   const data = useMemo(() => {
@@ -412,92 +527,181 @@ function App() {
               </article>
             </div>
 
-            <section className="panel chart-panel">
-              <div className="chart-header">
-                <div>
-                  <h3 className="chart-title">
-                    <TrendingUp size={20} />
-                    {t.chartTitle}
-                  </h3>
-                  <p className="chart-subtitle">{t.chartSubtitle}</p>
-                </div>
-
-                <div className="legend-row">
-                  <span className="legend-item">
-                    <i className="dot historical" />
-                    {t.historical}
-                  </span>
-                  <span className="legend-item">
-                    <i className="dot forecast" />
-                    {t.forecast}
-                  </span>
-                </div>
-              </div>
-
-              <div className="active-product">{selectedProduct ? getProductLabel(selectedProduct) : t.chooseProduct}</div>
-
-              <div className="chart-wrap">
-                {loading ? (
-                  <div className="chart-loading">{t.chartLoading}</div>
-                ) : data.length > 0 ? (
-                  <ResponsiveContainer width="100%" height={420}>
-                    <LineChart data={data}>
-                      <CartesianGrid strokeDasharray="5 5" stroke="#ffffff10" vertical={false} />
-                      <XAxis
-                        dataKey="date"
-                        stroke="#475569"
-                        tick={{ fontSize: 10, fill: "#64748b" }}
-                        tickLine={false}
-                        axisLine={false}
-                        interval={Math.max(0, Math.floor(data.length / 8))}
-                      />
-                      <YAxis
-                        stroke="#475569"
-                        tick={{ fontSize: 10, fill: "#64748b" }}
-                        tickLine={false}
-                        axisLine={false}
-                        width={40}
-                      />
-                      <Tooltip
-                        contentStyle={{
-                          backgroundColor: "#0f172a",
-                          border: "1px solid rgba(255,255,255,0.1)",
-                          borderRadius: "16px",
-                          boxShadow: "0 10px 30px rgba(0,0,0,0.5)",
-                          backdropFilter: "blur(10px)",
-                        }}
-                        itemStyle={{ color: "#5eead4", fontSize: "13px" }}
-                        labelStyle={{ color: "#94a3b8", marginBottom: "8px" }}
-                      />
-                      <Line
-                        type="stepAfter"
-                        dataKey="price"
-                        stroke="#5eead4"
-                        strokeWidth={3}
-                        dot={false}
-                        activeDot={{ r: 4, stroke: "#5eead4", strokeWidth: 2, fill: "#0f172a" }}
-                        connectNulls
-                        name={`${t.historical} + ${t.forecast}`}
-                      />
-                      <Line
-                        type="monotone"
-                        dataKey={(datum) => (datum.type === "Prediction" ? datum.price : null)}
-                        stroke="#f43f5e"
-                        strokeWidth={2}
-                        strokeDasharray="4 4"
-                        dot={false}
-                        name={t.forecast}
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <div className="empty-state">
-                    <Search size={40} />
-                    <p>{t.emptyState}</p>
+            <div className="analysis-main-grid">
+              <section className="panel chart-panel">
+                <div className="chart-header">
+                  <div>
+                    <h3 className="chart-title">
+                      <TrendingUp size={20} />
+                      {t.chartTitle}
+                    </h3>
+                    <p className="chart-subtitle">{t.chartSubtitle}</p>
                   </div>
-                )}
-              </div>
-            </section>
+
+                  <div className="legend-row">
+                    <span className="legend-item">
+                      <i className="dot historical" />
+                      {t.historical}
+                    </span>
+                    <span className="legend-item">
+                      <i className="dot forecast" />
+                      {t.forecast}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="active-product">{selectedProduct ? selectedProductLabel : t.chooseProduct}</div>
+
+                <div className="chart-wrap">
+                  {loading ? (
+                    <div className="chart-loading">{t.chartLoading}</div>
+                  ) : data.length > 0 ? (
+                    <ResponsiveContainer width="100%" height={420}>
+                      <LineChart data={data}>
+                        <CartesianGrid strokeDasharray="5 5" stroke="#ffffff10" vertical={false} />
+                        <XAxis
+                          dataKey="date"
+                          stroke="#475569"
+                          tick={{ fontSize: 10, fill: "#64748b" }}
+                          tickLine={false}
+                          axisLine={false}
+                          interval={Math.max(0, Math.floor(data.length / 8))}
+                        />
+                        <YAxis
+                          stroke="#475569"
+                          tick={{ fontSize: 10, fill: "#64748b" }}
+                          tickLine={false}
+                          axisLine={false}
+                          width={40}
+                        />
+                        <Tooltip
+                          contentStyle={{
+                            backgroundColor: "#0f172a",
+                            border: "1px solid rgba(255,255,255,0.1)",
+                            borderRadius: "16px",
+                            boxShadow: "0 10px 30px rgba(0,0,0,0.5)",
+                            backdropFilter: "blur(10px)",
+                          }}
+                          itemStyle={{ color: "#5eead4", fontSize: "13px" }}
+                          labelStyle={{ color: "#94a3b8", marginBottom: "8px" }}
+                        />
+                        <Line
+                          type="stepAfter"
+                          dataKey="price"
+                          stroke="#5eead4"
+                          strokeWidth={3}
+                          dot={false}
+                          activeDot={{ r: 4, stroke: "#5eead4", strokeWidth: 2, fill: "#0f172a" }}
+                          connectNulls
+                          name={`${t.historical} + ${t.forecast}`}
+                        />
+                        <Line
+                          type="monotone"
+                          dataKey={(datum) => (datum.type === "Prediction" ? datum.price : null)}
+                          stroke="#f43f5e"
+                          strokeWidth={2}
+                          strokeDasharray="4 4"
+                          dot={false}
+                          name={t.forecast}
+                        />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="empty-state">
+                      <Search size={40} />
+                      <p>{t.emptyState}</p>
+                    </div>
+                  )}
+                </div>
+              </section>
+
+              <section className="panel chat-panel">
+                <div className="chat-header">
+                  <h3 className="chart-title">
+                    <MessageSquareText size={20} />
+                    {t.chatTitle}
+                  </h3>
+                  <p className="chart-subtitle">{t.chatSubtitle}</p>
+                </div>
+
+                <div className="chat-stream" role="log" aria-live="polite">
+                  {chatMessages.length === 0 && !chatLoading ? (
+                    <div className="chat-empty">{t.chatNoMessages}</div>
+                  ) : (
+                    chatMessages.map((message, index) => (
+                      <article key={`${message.role}-${index}`} className={`chat-message ${message.role}`}>
+                        <div className="chat-avatar">
+                          {message.role === "assistant" ? <Bot size={14} /> : <User size={14} />}
+                        </div>
+                        <div className="chat-content">
+                          <p>{message.text}</p>
+                          {message.model ? (
+                            <div className="chat-meta">
+                              {t.chatModel}: <span>{message.model}</span>
+                            </div>
+                          ) : null}
+                          {Array.isArray(message.sources) && message.sources.length > 0 ? (
+                            <div className="chat-sources">
+                              <div className="chat-sources-title">{t.chatSources}</div>
+                              {message.sources.slice(0, 4).map((source) => (
+                                <a
+                                  key={source.url}
+                                  href={source.url}
+                                  className="chat-source-link"
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                >
+                                  <Link2 size={12} />
+                                  <span>{source.title || source.url}</span>
+                                </a>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                      </article>
+                    ))
+                  )}
+
+                  {chatLoading ? (
+                    <article className="chat-message assistant">
+                      <div className="chat-avatar">
+                        <Bot size={14} />
+                      </div>
+                      <div className="chat-content">
+                        <p>{t.chatThinking}</p>
+                      </div>
+                    </article>
+                  ) : null}
+                </div>
+
+                <form className="chat-form" onSubmit={sendChat}>
+                  <label className="field-label" htmlFor="chat-input">
+                    <MessageSquareText size={14} />
+                    {t.chatInputLabel}
+                  </label>
+                  <textarea
+                    id="chat-input"
+                    className="chat-input"
+                    value={chatInput}
+                    onChange={(event) => setChatInput(event.target.value)}
+                    placeholder={t.chatPlaceholder}
+                    rows={4}
+                    disabled={!selectedProduct || chatLoading}
+                  />
+                  <div className="chat-actions">
+                    <span className="chat-error-text">{chatError}</span>
+                    <button
+                      type="submit"
+                      className="chat-send-btn"
+                      disabled={!selectedProduct || chatLoading || !chatInput.trim()}
+                    >
+                      <SendHorizontal size={15} />
+                      {t.chatSend}
+                    </button>
+                  </div>
+                </form>
+              </section>
+            </div>
 
             <div className="detail-grid">
               <article className="panel detail-card">

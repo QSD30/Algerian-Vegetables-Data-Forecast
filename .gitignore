@@ -17,3 +17,8 @@ products_2025.txt
 # OS/editor
 .DS_Store
 Thumbs.db
+
+# Secrets
+.env
+*.env
+!*.env.example

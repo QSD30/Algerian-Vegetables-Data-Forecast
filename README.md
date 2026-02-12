@@ -20,6 +20,7 @@ cd backend
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
+# copy backend/.env.example to backend/.env and fill keys
 python main.py
 ```
 
@@ -30,6 +31,7 @@ Backend runs on `http://localhost:8000`.
 ```bash
 cd frontend
 npm install
+# set VITE_API_BASE_URL if backend is not localhost:8000
 npm run dev
 ```
 
@@ -60,3 +62,20 @@ Fallback if Pages is configured to build from repository root:
 - `PREDICTIONS_FILE` (default: `./predictions_2026.csv`)
 
 You can set relative or absolute paths.
+
+## AI Chatbot Configuration
+
+The chatbot is integrated into the dashboard next to the chart and uses:
+- Local CSV price history and predictions (always included in reasoning)
+- OpenRouter for answer generation
+- Firecrawl for fresh web factors (weather, policy, market signals)
+
+Backend environment variables:
+- `OPENROUTER_API_KEY` (required for LLM responses)
+- `FIRECRAWL_API_KEY` (optional but recommended for web context)
+- `OPENROUTER_MODEL` (default: `stepfun/step-3.5-flash:free`)
+- `OPENROUTER_FALLBACK_MODELS` (default: `openrouter/free`)
+- `AI_HTTP_TIMEOUT_SECONDS` (default: `30`)
+
+Frontend environment variable:
+- `VITE_API_BASE_URL` (default: `http://localhost:8000`)
